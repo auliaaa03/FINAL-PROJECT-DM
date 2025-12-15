@@ -8,6 +8,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.cluster import KMeans
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor, plot_tree
 from sklearn.metrics import r2_score, mean_squared_error
 
 # ===============================
@@ -19,7 +20,7 @@ st.set_page_config(
 )
 
 st.title("📊 Analisis Clustering & Regresi COVID-19 Indonesia")
-st.write("Aplikasi ini menampilkan clustering provinsi dan regresi linear COVID-19.")
+st.write("Clustering provinsi dan perbandingan Regresi Linear vs Decision Tree.")
 
 # ===============================
 # LOAD DATA
@@ -51,7 +52,6 @@ kolom = [
     'Populasi','Kepadatan_Penduduk',
     'Total_Kasus_Per_Juta','Total_Kematian_Per_Juta'
 ]
-
 df_cluster = df_cluster[kolom]
 
 # ===============================
@@ -74,40 +74,42 @@ df_cluster.replace([np.inf, -np.inf], np.nan, inplace=True)
 df_cluster.dropna(subset=fitur, inplace=True)
 
 # ===============================
-# VALIDASI DATA (INI KUNCI!)
+# VALIDASI DATA
 # ===============================
 if df_cluster.shape[0] < 3:
-    st.warning(
-        "⚠️ Data provinsi pada tanggal ini terlalu sedikit.\n"
-        "Silakan pilih tanggal lain."
-    )
+    st.warning("⚠️ Data provinsi terlalu sedikit, silakan pilih tanggal lain.")
     st.stop()
 
 if (df_cluster[fitur].std() == 0).any():
-    st.warning(
-        "⚠️ Salah satu fitur tidak memiliki variasi nilai.\n"
-        "Clustering tidak dapat dilakukan pada tanggal ini."
-    )
+    st.warning("⚠️ Salah satu fitur tidak memiliki variasi nilai.")
     st.stop()
 
 # ===============================
-# SCALING
+# MATRKS DATA (UNTUK LAPORAN)
+# ===============================
+st.subheader("📐 Matriks Data (Input Model)")
+
+X_matrix = df_cluster[['Populasi','Kepadatan_Penduduk','Total_Kasus_Per_Juta']]
+y_vector = df_cluster['Total_Kematian_Per_Juta']
+
+st.write("**Matriks X (Fitur)**")
+st.dataframe(X_matrix.head())
+
+st.write("**Vektor y (Target)**")
+st.dataframe(y_vector.head())
+
+# ===============================
+# SCALING & CLUSTERING
 # ===============================
 scaler = MinMaxScaler()
 scaled_df = scaler.fit_transform(df_cluster[fitur])
 
-# ===============================
-# CLUSTERING
-# ===============================
-st.subheader("🔹 Clustering Provinsi")
-
+st.subheader("🔹 Clustering Provinsi (K-Means)")
 k = st.slider("Jumlah Cluster (k)", 2, 7, 5)
+
 kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
 df_cluster['Cluster'] = kmeans.fit_predict(scaled_df)
 
-# ===============================
-# VISUALISASI CLUSTER
-# ===============================
 fig, ax = plt.subplots(figsize=(10,6))
 sns.scatterplot(
     data=df_cluster,
@@ -123,44 +125,52 @@ ax.grid(True)
 st.pyplot(fig)
 
 # ===============================
-# RINGKASAN CLUSTER
+# REGRESI: TRAIN TEST SPLIT
 # ===============================
-st.subheader("📌 Karakteristik Rata-rata Cluster")
-summary = df_cluster.groupby('Cluster')[fitur].mean().round(2)
-st.dataframe(summary)
+X_train, X_test, y_train, y_test = train_test_split(
+    X_matrix, y_vector, test_size=0.2, random_state=42
+)
 
 # ===============================
 # REGRESI LINEAR
 # ===============================
 st.subheader("📈 Regresi Linear")
 
-X = df_cluster[['Populasi','Kepadatan_Penduduk','Total_Kasus_Per_Juta']]
-y = df_cluster['Total_Kematian_Per_Juta']
+linreg = LinearRegression()
+linreg.fit(X_train, y_train)
 
-if X.shape[0] < 5:
-    st.warning("⚠️ Data tidak cukup untuk regresi.")
-    st.stop()
+y_pred_lr = linreg.predict(X_test)
 
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=42
-)
+r2_lr = r2_score(y_test, y_pred_lr)
+rmse_lr = np.sqrt(mean_squared_error(y_test, y_pred_lr))
 
-model = LinearRegression()
-model.fit(X_train, y_train)
-
-y_pred = model.predict(X_test)
-
-r2 = r2_score(y_test, y_pred)
-rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-
-st.write(f"**R² Score:** {r2:.3f}")
-st.write(f"**RMSE:** {rmse:.3f}")
+st.write(f"**R² Score (Linear):** {r2_lr:.3f}")
+st.write(f"**RMSE (Linear):** {rmse_lr:.3f}")
 
 # ===============================
-# PREDIKSI VS AKTUAL
+# DECISION TREE REGRESSION
+# ===============================
+st.subheader("🌳 Decision Tree Regression")
+
+tree = DecisionTreeRegressor(
+    max_depth=4,
+    random_state=42
+)
+tree.fit(X_train, y_train)
+
+y_pred_tree = tree.predict(X_test)
+
+r2_tree = r2_score(y_test, y_pred_tree)
+rmse_tree = np.sqrt(mean_squared_error(y_test, y_pred_tree))
+
+st.write(f"**R² Score (Decision Tree):** {r2_tree:.3f}")
+st.write(f"**RMSE (Decision Tree):** {rmse_tree:.3f}")
+
+# ===============================
+# VISUALISASI PERBANDINGAN
 # ===============================
 fig2, ax2 = plt.subplots(figsize=(6,5))
-ax2.scatter(y_test, y_pred)
+ax2.scatter(y_test, y_pred_tree)
 ax2.plot(
     [y_test.min(), y_test.max()],
     [y_test.min(), y_test.max()],
@@ -168,10 +178,26 @@ ax2.plot(
 )
 ax2.set_xlabel("Aktual")
 ax2.set_ylabel("Prediksi")
-ax2.set_title("Prediksi vs Aktual")
+ax2.set_title("Decision Tree: Prediksi vs Aktual")
 ax2.grid(True)
 st.pyplot(fig2)
 
-st.success("✅ Aplikasi berjalan dengan aman tanpa error")
+# ===============================
+# VISUALISASI POHON KEPUTUSAN
+# ===============================
+st.subheader("🌲 Visualisasi Pohon Keputusan")
+
+fig3, ax3 = plt.subplots(figsize=(18,6))
+plot_tree(
+    tree,
+    feature_names=X_matrix.columns,
+    filled=True,
+    max_depth=3,
+    fontsize=9
+)
+st.pyplot(fig3)
+
+st.success("✅ Aplikasi berjalan normal (Linear + Decision Tree + Matriks)")
+
 
 
