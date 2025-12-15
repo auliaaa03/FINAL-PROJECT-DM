@@ -22,80 +22,73 @@ st.title("📊 Analisis Clustering & Regresi COVID-19 Indonesia")
 st.write("Aplikasi ini menampilkan clustering provinsi dan regresi linear COVID-19.")
 
 # ===============================
-# LOAD DATA (AMAN)
+# LOAD DATA
 # ===============================
 @st.cache_data
 def load_data():
     df = pd.read_csv("Covid-19_Indonesia_Dataset.csv")
-
-    # pastikan kolom tanggal ada
-    if "Tanggal" not in df.columns:
-        st.error("❌ Kolom 'Tanggal' tidak ditemukan di dataset")
-        st.stop()
-
-    df["Tanggal"] = pd.to_datetime(
-        df["Tanggal"],
-        format="%m/%d/%Y",
-        errors="coerce"
-    )
-
-    df = df.dropna(subset=["Tanggal"])
+    df['Tanggal'] = pd.to_datetime(df['Tanggal'], format='%m/%d/%Y', errors='coerce')
     return df
 
 df = load_data()
 
 # ===============================
-# PILIH TANGGAL (FIX TOTAL)
+# PILIH TANGGAL
 # ===============================
 tanggal = st.date_input(
     "📅 Pilih Tanggal",
-    min_value=df["Tanggal"].min().date(),
-    max_value=df["Tanggal"].max().date(),
-    value=df["Tanggal"].max().date()
+    value=pd.to_datetime("2022-09-15")
 )
 
-# FILTER PALING AMAN
-df_cluster = df[df["Tanggal"].dt.date == tanggal].copy()
+df_cluster = df[df['Tanggal'] == pd.to_datetime(tanggal)].copy()
+df_cluster = df_cluster[df_cluster['Provinsi'].notnull()]
 
-if df_cluster.empty:
-    st.warning("⚠️ Tidak ada data pada tanggal tersebut")
+# ===============================
+# PILIH KOLOM
+# ===============================
+kolom = [
+    'Provinsi','Total_Kasus','Total_Kematian','Total_Sembuh',
+    'Populasi','Kepadatan_Penduduk',
+    'Total_Kasus_Per_Juta','Total_Kematian_Per_Juta'
+]
+
+df_cluster = df_cluster[kolom]
+
+# ===============================
+# FITUR TURUNAN
+# ===============================
+df_cluster['Rasio_Kematian'] = df_cluster['Total_Kematian'] / df_cluster['Total_Kasus']
+df_cluster['Rasio_Kesembuhan'] = df_cluster['Total_Sembuh'] / df_cluster['Total_Kasus']
+
+# ===============================
+# FITUR NUMERIK
+# ===============================
+fitur = [
+    'Total_Kasus','Total_Kematian','Total_Sembuh','Populasi',
+    'Kepadatan_Penduduk','Total_Kasus_Per_Juta',
+    'Total_Kematian_Per_Juta','Rasio_Kematian','Rasio_Kesembuhan'
+]
+
+df_cluster[fitur] = df_cluster[fitur].apply(pd.to_numeric, errors='coerce')
+df_cluster.replace([np.inf, -np.inf], np.nan, inplace=True)
+df_cluster.dropna(subset=fitur, inplace=True)
+
+# ===============================
+# VALIDASI DATA (INI KUNCI!)
+# ===============================
+if df_cluster.shape[0] < 3:
+    st.warning(
+        "⚠️ Data provinsi pada tanggal ini terlalu sedikit.\n"
+        "Silakan pilih tanggal lain."
+    )
     st.stop()
 
-df_cluster = df_cluster[df_cluster["Provinsi"].notnull()]
-
-# ===============================
-# FITUR
-# ===============================
-df_cluster = df_cluster[
-    [
-        "Provinsi",
-        "Total_Kasus",
-        "Total_Kematian",
-        "Total_Sembuh",
-        "Populasi",
-        "Kepadatan_Penduduk",
-        "Total_Kasus_Per_Juta",
-        "Total_Kematian_Per_Juta",
-    ]
-]
-
-df_cluster["Rasio_Kematian"] = df_cluster["Total_Kematian"] / df_cluster["Total_Kasus"]
-df_cluster["Rasio_Kesembuhan"] = df_cluster["Total_Sembuh"] / df_cluster["Total_Kasus"]
-
-df_cluster.replace([np.inf, -np.inf], np.nan, inplace=True)
-df_cluster.fillna(0, inplace=True)
-
-fitur = [
-    "Total_Kasus",
-    "Total_Kematian",
-    "Total_Sembuh",
-    "Populasi",
-    "Kepadatan_Penduduk",
-    "Total_Kasus_Per_Juta",
-    "Total_Kematian_Per_Juta",
-    "Rasio_Kematian",
-    "Rasio_Kesembuhan",
-]
+if (df_cluster[fitur].std() == 0).any():
+    st.warning(
+        "⚠️ Salah satu fitur tidak memiliki variasi nilai.\n"
+        "Clustering tidak dapat dilakukan pada tanggal ini."
+    )
+    st.stop()
 
 # ===============================
 # SCALING
@@ -109,25 +102,19 @@ scaled_df = scaler.fit_transform(df_cluster[fitur])
 st.subheader("🔹 Clustering Provinsi")
 
 k = st.slider("Jumlah Cluster (k)", 2, 7, 5)
-
-kmeans = KMeans(
-    n_clusters=k,
-    n_init=10,
-    random_state=42
-)
-
-df_cluster["Cluster"] = kmeans.fit_predict(scaled_df)
+kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+df_cluster['Cluster'] = kmeans.fit_predict(scaled_df)
 
 # ===============================
 # VISUALISASI CLUSTER
 # ===============================
-fig, ax = plt.subplots(figsize=(10, 6))
+fig, ax = plt.subplots(figsize=(10,6))
 sns.scatterplot(
     data=df_cluster,
-    x="Kepadatan_Penduduk",
-    y="Total_Kematian_Per_Juta",
-    hue="Cluster",
-    palette="viridis",
+    x='Kepadatan_Penduduk',
+    y='Total_Kematian_Per_Juta',
+    hue='Cluster',
+    palette='viridis',
     s=100,
     ax=ax
 )
@@ -139,7 +126,7 @@ st.pyplot(fig)
 # RINGKASAN CLUSTER
 # ===============================
 st.subheader("📌 Karakteristik Rata-rata Cluster")
-summary = df_cluster.groupby("Cluster")[fitur].mean()
+summary = df_cluster.groupby('Cluster')[fitur].mean().round(2)
 st.dataframe(summary)
 
 # ===============================
@@ -147,10 +134,12 @@ st.dataframe(summary)
 # ===============================
 st.subheader("📈 Regresi Linear")
 
-X = df_cluster[
-    ["Populasi", "Kepadatan_Penduduk", "Total_Kasus_Per_Juta"]
-]
-y = df_cluster["Total_Kematian_Per_Juta"]
+X = df_cluster[['Populasi','Kepadatan_Penduduk','Total_Kasus_Per_Juta']]
+y = df_cluster['Total_Kematian_Per_Juta']
+
+if X.shape[0] < 5:
+    st.warning("⚠️ Data tidak cukup untuk regresi.")
+    st.stop()
 
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
@@ -170,12 +159,12 @@ st.write(f"**RMSE:** {rmse:.3f}")
 # ===============================
 # PREDIKSI VS AKTUAL
 # ===============================
-fig2, ax2 = plt.subplots(figsize=(6, 5))
+fig2, ax2 = plt.subplots(figsize=(6,5))
 ax2.scatter(y_test, y_pred)
 ax2.plot(
     [y_test.min(), y_test.max()],
     [y_test.min(), y_test.max()],
-    "r--"
+    'r--'
 )
 ax2.set_xlabel("Aktual")
 ax2.set_ylabel("Prediksi")
@@ -183,5 +172,6 @@ ax2.set_title("Prediksi vs Aktual")
 ax2.grid(True)
 st.pyplot(fig2)
 
-st.success("✅ Aplikasi berjalan normal dan aman saat ganti tanggal")
+st.success("✅ Aplikasi berjalan dengan aman tanpa error")
+
 
