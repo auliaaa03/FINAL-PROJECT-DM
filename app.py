@@ -8,7 +8,7 @@ from sklearn.preprocessing import MinMaxScaler
 from sklearn.cluster import KMeans
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
-from sklearn.tree import DecisionTreeRegressor, plot_tree
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_squared_error
 
 # ===============================
@@ -20,7 +20,7 @@ st.set_page_config(
 )
 
 st.title("📊 Analisis Clustering & Regresi COVID-19 Indonesia")
-st.write("Clustering provinsi dan perbandingan Regresi Linear vs Decision Tree.")
+st.write("Clustering provinsi dan perbandingan Regresi Linear vs Random Forest")
 
 # ===============================
 # LOAD DATA
@@ -28,7 +28,7 @@ st.write("Clustering provinsi dan perbandingan Regresi Linear vs Decision Tree."
 @st.cache_data
 def load_data():
     df = pd.read_csv("Covid-19_Indonesia_Dataset.csv")
-    df['Tanggal'] = pd.to_datetime(df['Tanggal'], format='%m/%d/%Y', errors='coerce')
+    df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce")
     return df
 
 df = load_data()
@@ -38,97 +38,110 @@ df = load_data()
 # ===============================
 tanggal = st.date_input(
     "📅 Pilih Tanggal",
-    value=pd.to_datetime("2022-09-15")
+    value=pd.to_datetime("2022-09-15"),
+    min_value=df["Tanggal"].min(),
+    max_value=df["Tanggal"].max()
 )
 
-df_cluster = df[df['Tanggal'] == pd.to_datetime(tanggal)].copy()
-df_cluster = df_cluster[df_cluster['Provinsi'].notnull()]
+df_cluster = df[df["Tanggal"] == pd.to_datetime(tanggal)].copy()
+df_cluster = df_cluster[df_cluster["Provinsi"].notnull()]
+
+if df_cluster.empty:
+    st.error("❌ Data pada tanggal ini tidak tersedia")
+    st.stop()
 
 # ===============================
-# PILIH KOLOM
+# PILIH FITUR
 # ===============================
-kolom = [
-    'Provinsi','Total_Kasus','Total_Kematian','Total_Sembuh',
-    'Populasi','Kepadatan_Penduduk',
-    'Total_Kasus_Per_Juta','Total_Kematian_Per_Juta'
-]
-df_cluster = df_cluster[kolom]
-
-# ===============================
-# FITUR TURUNAN
-# ===============================
-df_cluster['Rasio_Kematian'] = df_cluster['Total_Kematian'] / df_cluster['Total_Kasus']
-df_cluster['Rasio_Kesembuhan'] = df_cluster['Total_Sembuh'] / df_cluster['Total_Kasus']
-
-# ===============================
-# FITUR NUMERIK
-# ===============================
-fitur = [
-    'Total_Kasus','Total_Kematian','Total_Sembuh','Populasi',
-    'Kepadatan_Penduduk','Total_Kasus_Per_Juta',
-    'Total_Kematian_Per_Juta','Rasio_Kematian','Rasio_Kesembuhan'
+df_cluster = df_cluster[
+    [
+        "Provinsi",
+        "Total_Kasus",
+        "Total_Kematian",
+        "Total_Sembuh",
+        "Populasi",
+        "Kepadatan_Penduduk",
+        "Total_Kasus_Per_Juta",
+        "Total_Kematian_Per_Juta",
+    ]
 ]
 
-df_cluster[fitur] = df_cluster[fitur].apply(pd.to_numeric, errors='coerce')
+# Rasio
+df_cluster["Rasio_Kematian"] = df_cluster["Total_Kematian"] / df_cluster["Total_Kasus"]
+df_cluster["Rasio_Kesembuhan"] = df_cluster["Total_Sembuh"] / df_cluster["Total_Kasus"]
+
 df_cluster.replace([np.inf, -np.inf], np.nan, inplace=True)
-df_cluster.dropna(subset=fitur, inplace=True)
+df_cluster.fillna(0, inplace=True)
+
+fitur = [
+    "Total_Kasus",
+    "Total_Kematian",
+    "Total_Sembuh",
+    "Populasi",
+    "Kepadatan_Penduduk",
+    "Total_Kasus_Per_Juta",
+    "Total_Kematian_Per_Juta",
+    "Rasio_Kematian",
+    "Rasio_Kesembuhan",
+]
 
 # ===============================
-# VALIDASI DATA
+# MATRIX (CORRELATION MATRIX)
 # ===============================
-if df_cluster.shape[0] < 3:
-    st.warning("⚠️ Data provinsi terlalu sedikit, silakan pilih tanggal lain.")
-    st.stop()
+st.subheader("🧮 Matriks Korelasi Fitur")
 
-if (df_cluster[fitur].std() == 0).any():
-    st.warning("⚠️ Salah satu fitur tidak memiliki variasi nilai.")
-    st.stop()
+corr = df_cluster[fitur].corr()
 
-# ===============================
-# MATRKS DATA (UNTUK LAPORAN)
-# ===============================
-st.subheader("📐 Matriks Data (Input Model)")
+fig_corr, ax_corr = plt.subplots(figsize=(10, 6))
+sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax_corr)
+ax_corr.set_title("Correlation Matrix")
+st.pyplot(fig_corr)
 
-X_matrix = df_cluster[['Populasi','Kepadatan_Penduduk','Total_Kasus_Per_Juta']]
-y_vector = df_cluster['Total_Kematian_Per_Juta']
-
-st.write("**Matriks X (Fitur)**")
-st.dataframe(X_matrix.head())
-
-st.write("**Vektor y (Target)**")
-st.dataframe(y_vector.head())
+st.info(
+    "📌 Matriks ini menunjukkan hubungan antar variabel. "
+    "Nilai mendekati 1 berarti hubungan kuat, mendekati 0 berarti lemah."
+)
 
 # ===============================
-# SCALING & CLUSTERING
+# SCALING
 # ===============================
 scaler = MinMaxScaler()
 scaled_df = scaler.fit_transform(df_cluster[fitur])
 
+# ===============================
+# CLUSTERING
+# ===============================
 st.subheader("🔹 Clustering Provinsi (K-Means)")
-k = st.slider("Jumlah Cluster (k)", 2, 7, 5)
+
+k = st.slider("Jumlah Cluster (k)", 2, 7, 3)
 
 kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
-df_cluster['Cluster'] = kmeans.fit_predict(scaled_df)
+df_cluster["Cluster"] = kmeans.fit_predict(scaled_df)
 
-fig, ax = plt.subplots(figsize=(10,6))
+fig_c, ax_c = plt.subplots(figsize=(8, 5))
 sns.scatterplot(
     data=df_cluster,
-    x='Kepadatan_Penduduk',
-    y='Total_Kematian_Per_Juta',
-    hue='Cluster',
-    palette='viridis',
+    x="Kepadatan_Penduduk",
+    y="Total_Kematian_Per_Juta",
+    hue="Cluster",
+    palette="viridis",
     s=100,
-    ax=ax
+    ax=ax_c,
 )
-ax.set_title("Sebaran Cluster Provinsi")
-ax.grid(True)
-st.pyplot(fig)
+ax_c.set_title("Sebaran Cluster Provinsi")
+ax_c.grid(True)
+st.pyplot(fig_c)
 
 # ===============================
-# REGRESI: TRAIN TEST SPLIT
+# DATA REGRESI
 # ===============================
+X = df_cluster[
+    ["Populasi", "Kepadatan_Penduduk", "Total_Kasus_Per_Juta"]
+]
+y = df_cluster["Total_Kematian_Per_Juta"]
+
 X_train, X_test, y_train, y_test = train_test_split(
-    X_matrix, y_vector, test_size=0.2, random_state=42
+    X, y, test_size=0.2, random_state=42
 )
 
 # ===============================
@@ -144,60 +157,52 @@ y_pred_lr = linreg.predict(X_test)
 r2_lr = r2_score(y_test, y_pred_lr)
 rmse_lr = np.sqrt(mean_squared_error(y_test, y_pred_lr))
 
-st.write(f"**R² Score (Linear):** {r2_lr:.3f}")
-st.write(f"**RMSE (Linear):** {rmse_lr:.3f}")
+st.write(f"**R² Linear:** {r2_lr:.3f}")
+st.write(f"**RMSE Linear:** {rmse_lr:.3f}")
 
 # ===============================
-# DECISION TREE REGRESSION
+# RANDOM FOREST REGRESSION
 # ===============================
-st.subheader("🌳 Decision Tree Regression")
+st.subheader("🌲 Random Forest Regression")
 
-tree = DecisionTreeRegressor(
-    max_depth=4,
+rf = RandomForestRegressor(
+    n_estimators=200,
+    max_depth=6,
     random_state=42
 )
-tree.fit(X_train, y_train)
+rf.fit(X_train, y_train)
 
-y_pred_tree = tree.predict(X_test)
+y_pred_rf = rf.predict(X_test)
 
-r2_tree = r2_score(y_test, y_pred_tree)
-rmse_tree = np.sqrt(mean_squared_error(y_test, y_pred_tree))
+r2_rf = r2_score(y_test, y_pred_rf)
+rmse_rf = np.sqrt(mean_squared_error(y_test, y_pred_rf))
 
-st.write(f"**R² Score (Decision Tree):** {r2_tree:.3f}")
-st.write(f"**RMSE (Decision Tree):** {rmse_tree:.3f}")
-
-# ===============================
-# VISUALISASI PERBANDINGAN
-# ===============================
-fig2, ax2 = plt.subplots(figsize=(6,5))
-ax2.scatter(y_test, y_pred_tree)
-ax2.plot(
-    [y_test.min(), y_test.max()],
-    [y_test.min(), y_test.max()],
-    'r--'
-)
-ax2.set_xlabel("Aktual")
-ax2.set_ylabel("Prediksi")
-ax2.set_title("Decision Tree: Prediksi vs Aktual")
-ax2.grid(True)
-st.pyplot(fig2)
+st.write(f"**R² Random Forest:** {r2_rf:.3f}")
+st.write(f"**RMSE Random Forest:** {rmse_rf:.3f}")
 
 # ===============================
-# VISUALISASI POHON KEPUTUSAN
+# PERBANDINGAN PREDIKSI
 # ===============================
-st.subheader("🌲 Visualisasi Pohon Keputusan")
+st.subheader("📊 Perbandingan Prediksi vs Aktual")
 
-fig3, ax3 = plt.subplots(figsize=(18,6))
-plot_tree(
-    tree,
-    feature_names=X_matrix.columns,
-    filled=True,
-    max_depth=3,
-    fontsize=9
-)
-st.pyplot(fig3)
+fig_p, ax_p = plt.subplots(1, 2, figsize=(12, 5))
 
-st.success("✅ Aplikasi berjalan normal (Linear + Decision Tree + Matriks)")
+ax_p[0].scatter(y_test, y_pred_lr)
+ax_p[0].plot([y.min(), y.max()], [y.min(), y.max()], "r--")
+ax_p[0].set_title("Regresi Linear")
+ax_p[0].set_xlabel("Aktual")
+ax_p[0].set_ylabel("Prediksi")
+
+ax_p[1].scatter(y_test, y_pred_rf)
+ax_p[1].plot([y.min(), y.max()], [y.min(), y.max()], "r--")
+ax_p[1].set_title("Random Forest")
+ax_p[1].set_xlabel("Aktual")
+ax_p[1].set_ylabel("Prediksi")
+
+st.pyplot(fig_p)
+
+st.success("✅ Aplikasi berjalan dengan baik tanpa error")
+
 
 
 
